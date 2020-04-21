@@ -7,6 +7,7 @@ import pathlib
 import streamlit as st
 import altair as alt
 import pandas as pd
+from pathlib import PurePath
 
 def read_intent_report(path):
     blob = json.loads(path.read_text())
@@ -17,6 +18,14 @@ def read_entity_report(path):
     blob = json.loads(path.read_text())
     jsonl = [{**v, 'config': path.parts[1]} for k,v in blob.items() if 'weighted avg' in k]
     return pd.DataFrame(jsonl).drop(columns=['support'])
+
+def read_intent_errors(path):
+    df = pd.DataFrame(json.loads(path.read_text()))
+    pred = df["intent_prediction"].tolist()
+    df = df.drop(columns=['intent_prediction'])
+    df2 = pd.DataFrame(pred).rename(columns={'name': 'intent_prediction'})
+    intent_errors_df = pd.concat([df,df2],axis=1)
+    return intent_errors_df
 
 def add_zeros(dataf, all_configs):
     for cfg in all_configs:
@@ -35,8 +44,19 @@ def read_pandas(results_folder):
     paths = list(pathlib.Path(results_folder).glob("*/CRFEntityExtractor_report.json")) 
     paths += list(pathlib.Path(results_folder).glob("*/DIETClassifier_report.json"))
     entity_df = pd.concat([read_entity_report(p) for p in paths]).pipe(add_zeros, all_configs=configurations)
+    
     return intent_df, entity_df
 
+
+st.cache()
+def read_errors(results_folder):
+    paths = list(pathlib.Path(results_folder).glob("*/intent_errors.json"))
+    intent_df = pd.DataFrame()
+    for p in paths:
+        tmp = read_intent_errors(p)
+        tmp["config"] = PurePath(p.parents[0]).parts[-1]
+        intent_df = pd.concat([intent_df,tmp])    
+    return intent_df
 
 st.markdown("# Rasa GridResults Summary")
 st.markdown("Quick Overview of Crossvalidated Runs")
@@ -47,6 +67,7 @@ results_folder = st.sidebar.text_input("What is your results folder?", value='gr
 
 if pathlib.Path(results_folder).exists():
     intent_df, entity_df = read_pandas(results_folder=results_folder)
+    intent_errors_df = read_errors(results_folder=results_folder)
     possible_configs = list(intent_df['config'])
 else: 
     st.write(f"Are you sure this results folder `{results_folder}` exists?")
@@ -55,6 +76,7 @@ st.sidebar.markdown("Select what you care about.")
 selected_config = st.sidebar.multiselect("Select Result Folders", 
                                           possible_configs, 
                                           default=possible_configs)
+
 show_raw_data = st.sidebar.checkbox("Show Raw Data")
 if show_raw_data:
     show_markdown = st.sidebar.checkbox("Show Raw as Markdown")
@@ -98,3 +120,12 @@ if show_raw_data:
         st.code(raw_data.to_markdown())
     else:
         st.write(raw_data)
+
+show_intent_errors = st.sidebar.checkbox("Show Intent Errors")
+if show_intent_errors:
+    st.markdown("# Intent Errors Summary")
+    st.markdown("Overview of intent errors to quickly detect wrong labelling.")
+    for config in selected_config:
+        st.markdown(f"## {config}")
+        subset_intent_errors_df = intent_errors_df.loc[lambda d: d['config'].isin([config])]
+        st.write(subset_intent_errors_df.drop(columns=['config']))
